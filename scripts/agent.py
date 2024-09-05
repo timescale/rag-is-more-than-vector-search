@@ -22,41 +22,6 @@ def find_closest_repo(query: str, repos: list[str]) -> str | None:
     return best_match[0] if best_match[1] >= 80 else None
 
 
-class Summary(BaseModel):
-    chain_of_thought: str
-    summary: str
-
-
-def summarize_content(issues: list[Record], query: Optional[str]):
-    client = instructor.from_openai(OpenAI())
-    return client.chat.completions.create(
-        messages=[
-            {
-                "role": "system",
-                "content": """You're a helpful assistant that summarizes information about issues from a github repository. Be sure to output your response in a single paragraph that is concise and to the point.""",
-            },
-            {
-                "role": "user",
-                "content": Template(
-                    """
-                    Here are the relevant issues:
-                    {% for issue in issues %}
-                    - {{ issue['text'] }}
-                    {% endfor %}
-                    {% if query %}
-                    My specific query is: {{ query }}
-                    {% else %}
-                    Please provide a broad summary and key insights from the issues above.
-                    {% endif %}
-                    """
-                ).render(issues=issues, query=query),
-            },
-        ],
-        response_model=Summary,
-        model="gpt-4o-mini",
-    )
-
-
 class SearchIssues(BaseModel):
     """
     Use this when the user wants to get original issue information from the database
@@ -163,6 +128,41 @@ class SearchSummaries(BaseModel):
         ).render(table_name="github_issue_summaries", embedding=embedding)
 
         return await conn.fetch(sql_query, *args)
+
+
+class Summary(BaseModel):
+    chain_of_thought: str
+    summary: str
+
+
+def summarize_content(issues: list[Record], query: Optional[str]):
+    client = instructor.from_openai(OpenAI())
+    return client.chat.completions.create(
+        messages=[
+            {
+                "role": "system",
+                "content": """You're a helpful assistant that summarizes information about issues from a github repository. Be sure to output your response in a single paragraph that is concise and to the point.""",
+            },
+            {
+                "role": "user",
+                "content": Template(
+                    """
+                    Here are the relevant issues:
+                    {% for issue in issues %}
+                    - {{ issue['text'] }}
+                    {% endfor %}
+                    {% if query %}
+                    My specific query is: {{ query }}
+                    {% else %}
+                    Please provide a broad summary and key insights from the issues above.
+                    {% endif %}
+                    """
+                ).render(issues=issues, query=query),
+            },
+        ],
+        response_model=Summary,
+        model="gpt-4o-mini",
+    )
 
 
 async def get_conn():
