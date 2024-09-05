@@ -141,7 +141,7 @@ def summarize_content(issues: list[Record], query: Optional[str]):
         messages=[
             {
                 "role": "system",
-                "content": """You're a helpful assistant that summarizes information about issues from a github repository. Be sure to output your response in a single paragraph that is concise and to the point.""",
+                "content": "You're a helpful assistant that summarizes information about issues from a github repository. Be sure to output your response in a single paragraph that is concise and to the point.",
             },
             {
                 "role": "user",
