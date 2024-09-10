@@ -89,7 +89,7 @@ async def batch_classify_issue(
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful assistant that classifies and summarizees GitHub issues. When summarizing the issues, make sure to expand on specific accronyms and add additional explanation where necessary.",
+                        "content": "You are a helpful assistant that classifies and summarizes GitHub issues. When summarizing the issues, make sure to expand on specific accronyms and add additional explanation where necessary.",
                     },
                     {
                         "role": "user",
