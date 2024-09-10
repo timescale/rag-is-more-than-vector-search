@@ -2,7 +2,7 @@
 
 # Introduction
 
-This is a repository that contains the code for the article `RAG is more than embeddings`. The code is compatible for python >= 3.9.
+This is a repository that contains the code for the article `RAG is more than embeddings`. Head over to the [Timescale blog](https://www.timescale.com/blog/tag/ai/) to read the article if you haven't already. The code is compatible for python >= 3.9.
 
 ## Instructions
 
