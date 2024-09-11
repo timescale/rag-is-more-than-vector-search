@@ -74,7 +74,7 @@ class RunSQLReturnPandas(BaseModel):
     Use this function when the user wants to do time series analysis or data analysis and we don't have a tool that can supply the necessary information
     """
 
-    query: str
+    query: str = Field(description="Description of user's query")
     repos: list[str] = Field(
         description="the repos to run the query on, should be in the format of 'owner/repo'"
     )
