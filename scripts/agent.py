@@ -104,34 +104,24 @@ class RunSQLReturnPandas(BaseModel):
         **Database Schema:**
 
         ```sql
-        CREATE TYPE issue_label AS ENUM ('OPEN', 'CLOSED', 'DUPLICATE');
-
         CREATE TABLE IF NOT EXISTS github_issues (
-            issue_id INTEGER,
-            metadata JSONB,
-            text TEXT,
-            repo_name TEXT,
-            start_ts TIMESTAMPTZ NOT NULL,
-            end_ts TIMESTAMPTZ,
-            embedding VECTOR(1536) NOT NULL
-        );
-
-        CREATE UNIQUE INDEX ON github_issues (issue_id, start_ts);
-
-        CREATE TABLE github_issue_comments (
-        comment_id SERIAL,
-        issue_id INTEGER NOT NULL,
-        order_in_issue INTEGER NOT NULL,
-        title TEXT,
-        action TEXT,
-        author TEXT NOT NULL,
+        issue_id INTEGER,
+        metadata JSONB,
+        text TEXT,
         repo_name TEXT,
-        created_at TIMESTAMPTZ NOT NULL,
-        text TEXT NOT NULL,
+        start_ts TIMESTAMPTZ NOT NULL,
+        end_ts TIMESTAMPTZ,
         embedding VECTOR(1536) NOT NULL
         );
 
-        CREATE UNIQUE INDEX ON github_issue_comments (comment_id, created_at);
+        CREATE INDEX github_issue_embedding_idx
+        ON github_issues
+        USING diskann (embedding);
+
+        -- Create a Hypertable that breaks it down by 1 month intervals
+        SELECT create_hypertable('github_issues', 'start_ts', chunk_time_interval => INTERVAL '1 month');
+
+        CREATE UNIQUE INDEX ON github_issues (issue_id, start_ts);
 
         CREATE TABLE github_issue_summaries (
             issue_id INTEGER,
@@ -140,6 +130,10 @@ class RunSQLReturnPandas(BaseModel):
             repo_name TEXT,
             embedding VECTOR(1536) NOT NULL
         );
+
+        CREATE INDEX github_issue_summaries_embedding_idx
+        ON github_issue_summaries
+        USING diskann (embedding);
         ```
 
         Examples:
