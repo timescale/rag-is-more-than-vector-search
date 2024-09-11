@@ -71,10 +71,10 @@ class SearchIssues(BaseModel):
 
 class RunSQLReturnPandas(BaseModel):
     """
-    Use this function when the user wants to do time series analysis or data analysis and we don't have a tool that can supply the necessary information
+    Use this function when the user wants to do time series analysis, data analysis or compute some specific statistics and we don't have a tool that can supply the necessary information
     """
 
-    query: str = Field(description="Description of user's query")
+    user_query_summary: str = Field(description="Description of user's query")
     repos: list[str] = Field(
         description="the repos to run the query on, should be in the format of 'owner/repo'"
     )
@@ -82,7 +82,7 @@ class RunSQLReturnPandas(BaseModel):
     async def execute(self, conn: Connection, limit: int):
         prompt = f"""
         ```markdown
-        You are a SQL expert tasked with writing queries including a time attribute for the relevant table. The user wants to execute a query for the following repos: {self.repos} to answer the query of {self.query}. 
+        You are a SQL expert tasked with writing queries including a time attribute for the relevant table. The user wants to execute a query for the following repos: {self.repos} to answer the query of {self.user_query_summary}. 
 
         - If you need to filter by repository, use the `repo_name` column.
         - When partitioning items by a specific time period, always use the `time_bucket` function provided by TimescaleDB. For example:
@@ -185,7 +185,20 @@ class RunSQLReturnPandas(BaseModel):
         --------------------
                            4
         """
-        pass
+
+        class GeneratedSQL(BaseModel):
+            chain_of_thought: str
+            sql: str = Field(description="Generated SQL Query")
+
+        client = instructor.from_openai(OpenAI())
+        sql = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": prompt},
+            ],
+            response_model=GeneratedSQL,
+            model="gpt-4o-mini",
+        )
+        return await conn.fetch(sql.sql)
 
 
 class SearchSummaries(BaseModel):
@@ -240,7 +253,7 @@ class Summary(BaseModel):
     summary: str
 
 
-def summarize_content(issues: list[Record], query: Optional[str]):
+def summarize_content(results: list[Record], query: Optional[str]):
     client = instructor.from_openai(OpenAI())
     return client.chat.completions.create(
         messages=[
@@ -253,8 +266,13 @@ def summarize_content(issues: list[Record], query: Optional[str]):
                 "content": Template(
                     """
                     Here are the relevant issues:
-                    {% for issue in issues %}
-                    - {{ issue['text'] }}
+                    {% for result in results %}
+                    <tool>
+                        - {{ result['tool'] }}
+                        {% for row in result['result'] %}
+                        {{ dict(row) }}
+                        {% endfor %}
+                    </tool>
                     {% endfor %}
                     {% if query %}
                     My specific query is: {{ query }}
@@ -262,7 +280,7 @@ def summarize_content(issues: list[Record], query: Optional[str]):
                     Please provide a broad summary and key insights from the issues above.
                     {% endif %}
                     """
-                ).render(issues=issues, query=query),
+                ).render(results=results, query=query),
             },
         ],
         response_model=Summary,
@@ -311,7 +329,9 @@ def one_step_agent(question: str, repos: list[str]):
 
 
 async def main():
-    query = "What are the main issues people face with endpoint connectivity between different pods in kubernetes?"
+    query = "What was the differnce in the number of yearly issues for the rust repository? Generate a markdown table that shows the year, number of issues and the change from the previous quarter with a short description at the end summarising the overall trends"
+
+    print(f"Query: {query}")
 
     repos = [
         "rust-lang/rust",
@@ -340,9 +360,12 @@ async def main():
     limit = 10
 
     tools = [tool for tool in resp]
-    print(tools)
+    print(f"Tools: {tools}")
 
-    result = await tools[0].execute(conn, limit)
+    result = []
+    for tool in tools:
+        tool_call = await tool.execute(conn, limit)
+        result.append({"tool": tool, "result": tool_call})
 
     summary = summarize_content(result, query)
     print(summary.summary)
