@@ -121,8 +121,6 @@ class RunSQLReturnPandas(BaseModel):
         -- Create a Hypertable that breaks it down by 1 month intervals
         SELECT create_hypertable('github_issues', 'start_ts', chunk_time_interval => INTERVAL '1 month');
 
-        CREATE UNIQUE INDEX ON github_issues (issue_id, start_ts);
-
         CREATE TABLE github_issue_summaries (
             issue_id INTEGER,
             text TEXT,
