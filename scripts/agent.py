@@ -71,16 +71,134 @@ class SearchIssues(BaseModel):
 
 class RunSQLReturnPandas(BaseModel):
     """
-    Use this function when the user wants to do time series analysis or data analysis and we don't have a tool that can supply the necessary information
+    Use this function when the user wants to do time series analysis, data analysis or compute some specific statistics and we don't have a tool that can supply the necessary information
     """
 
-    query: str = Field(description="Description of user's query")
+    user_query_summary: str = Field(description="Description of user's query")
     repos: list[str] = Field(
         description="the repos to run the query on, should be in the format of 'owner/repo'"
     )
 
     async def execute(self, conn: Connection, limit: int):
-        pass
+        prompt = f"""
+        ```markdown
+        You are a SQL expert tasked with writing queries including a time attribute for the relevant table. The user wants to execute a query for the following repos: {self.repos} to answer the query of {self.user_query_summary}. 
+
+        - If you need to filter by repository, use the `repo_name` column.
+        - When partitioning items by a specific time period, always use the `time_bucket` function provided by TimescaleDB. For example:
+        ```sql
+        SELECT time_bucket('2 month', start_ts) AS month,
+                COUNT(*) AS issue_count
+        FROM github_issues
+        GROUP BY month
+        ORDER BY month;
+        ```
+        - This groups data into a 2 month buckets and the individual rows into groups of two week intervals. Adjust the interval (e.g., '2 weeks', '1 day') as needed for the specific query.
+        - The `time_bucket` function can take any arbitrary interval such as week, month, or year.
+        - When looking at comments, note that `order_in_issue` begins with 1 and increments thereafter, so make sure to account for that.
+        - The `metadata` field is currently empty, so do not use it.
+        - To determine if an issue is closed or not, use the `issue_label` column.
+        - To detect involvement or participation in an issue, check for comments in the `github_issue_comments` table.
+        - Only use the tables and the fields provided in the database schema below.
+        
+        **Database Schema:**
+
+        ```sql
+        CREATE TABLE IF NOT EXISTS github_issues (
+        issue_id INTEGER,
+        metadata JSONB,
+        text TEXT,
+        repo_name TEXT,
+        start_ts TIMESTAMPTZ NOT NULL,
+        end_ts TIMESTAMPTZ,
+        embedding VECTOR(1536) NOT NULL
+        );
+
+        CREATE INDEX github_issue_embedding_idx
+        ON github_issues
+        USING diskann (embedding);
+
+        -- Create a Hypertable that breaks it down by 1 month intervals
+        SELECT create_hypertable('github_issues', 'start_ts', chunk_time_interval => INTERVAL '1 month');
+
+        CREATE TABLE github_issue_summaries (
+            issue_id INTEGER,
+            text TEXT,
+            label issue_label NOT NULL,
+            repo_name TEXT,
+            embedding VECTOR(1536) NOT NULL
+        );
+
+        CREATE INDEX github_issue_summaries_embedding_idx
+        ON github_issue_summaries
+        USING diskann (embedding);
+        ```
+
+        Examples:
+        Query: How many issues were created in the apache/spark repository every two months?        
+        SQL:
+        tsdb=> SELECT time_bucket('2 months', start_ts) AS two_month_period, COUNT(*) AS issue_count 
+                FROM github_issues 
+                WHERE repo_name = 'rust-lang/rust' 
+                GROUP BY two_month_period 
+                ORDER BY two_month_period;
+
+                
+            two_month_period    | issue_count 
+        ------------------------+-------------
+        2013-09-01 00:00:00+00 |           1
+        2015-01-01 00:00:00+00 |           3
+        2015-03-01 00:00:00+00 |           2
+        2015-05-01 00:00:00+00 |           1
+
+        Example:
+        Query: What is the average time to first response for issues in the MicrosoftDocs/azure-docs repository?
+        SQL:
+        ```sql
+        SELECT AVG(EXTRACT(EPOCH FROM (first_comment.created_at - issues.start_ts))) / 3600 AS average_time_to_first_response_hours
+        FROM github_issues AS issues
+        LEFT JOIN (
+            SELECT issue_id, MIN(created_at) AS created_at
+            FROM github_issue_comments
+            WHERE order_in_issue = 1
+            GROUP BY issue_id
+        ) AS first_comment ON issues.issue_id = first_comment.issue_id
+        WHERE issues.repo_name = 'MicrosoftDocs/azure-docs'
+        AND first_comment.created_at IS NOT NULL;
+
+
+        average_time_to_first_response_hours
+        -------------------------------------
+                                       12.5
+
+        Example:
+        Query: How many unique issues has alextp commented on in the tensorflow library?
+        SQL:
+        ```sql
+        SELECT COUNT(DISTINCT issue_id) AS unique_issues_count
+        FROM github_issue_comments
+        WHERE author = 'alextp'
+        AND repo_name = 'tensorflow/tensorflow';
+        ```
+
+        unique_issues_count
+        --------------------
+                           4
+        """
+
+        class GeneratedSQL(BaseModel):
+            chain_of_thought: str
+            sql: str = Field(description="Generated SQL Query")
+
+        client = instructor.from_openai(OpenAI())
+        sql = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": prompt},
+            ],
+            response_model=GeneratedSQL,
+            model="gpt-4o-mini",
+        )
+        return await conn.fetch(sql.sql)
 
 
 class SearchSummaries(BaseModel):
@@ -135,7 +253,7 @@ class Summary(BaseModel):
     summary: str
 
 
-def summarize_content(issues: list[Record], query: Optional[str]):
+def summarize_content(results: list[Record], query: Optional[str]):
     client = instructor.from_openai(OpenAI())
     return client.chat.completions.create(
         messages=[
@@ -148,8 +266,13 @@ def summarize_content(issues: list[Record], query: Optional[str]):
                 "content": Template(
                     """
                     Here are the relevant issues:
-                    {% for issue in issues %}
-                    - {{ issue['text'] }}
+                    {% for result in results %}
+                    <tool>
+                        - {{ result['tool'] }}
+                        {% for row in result['result'] %}
+                        {{ dict(row) }}
+                        {% endfor %}
+                    </tool>
                     {% endfor %}
                     {% if query %}
                     My specific query is: {{ query }}
@@ -157,7 +280,7 @@ def summarize_content(issues: list[Record], query: Optional[str]):
                     Please provide a broad summary and key insights from the issues above.
                     {% endif %}
                     """
-                ).render(issues=issues, query=query),
+                ).render(results=results, query=query),
             },
         ],
         response_model=Summary,
@@ -206,7 +329,9 @@ def one_step_agent(question: str, repos: list[str]):
 
 
 async def main():
-    query = "What are the main issues people face with endpoint connectivity between different pods in kubernetes?"
+    query = "What was the differnce in the number of yearly issues for the rust repository? Generate a markdown table that shows the year, number of issues and the change from the previous quarter with a short description at the end summarising the overall trends"
+
+    print(f"Query: {query}")
 
     repos = [
         "rust-lang/rust",
@@ -235,9 +360,12 @@ async def main():
     limit = 10
 
     tools = [tool for tool in resp]
-    print(tools)
+    print(f"Tools: {tools}")
 
-    result = await tools[0].execute(conn, limit)
+    result = []
+    for tool in tools:
+        tool_call = await tool.execute(conn, limit)
+        result.append({"tool": tool, "result": tool_call})
 
     summary = summarize_content(result, query)
     print(summary.summary)
