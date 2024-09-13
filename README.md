@@ -1,4 +1,4 @@
-# rag-is-more-than-vector-search
+# RAG is more than vector search
 
 # Introduction
 
