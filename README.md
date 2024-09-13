@@ -1,4 +1,4 @@
-# rag-is-more-than-embeddings
+# rag-is-more-than-vector-search
 
 # Introduction
 
